@@ -1,10 +1,43 @@
-from fastapi import FastAPI
-from app.api.v1.tasks import router
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
-app = FastAPI(title="Task Service", version="1.0")
+from app.api.v1 import tasks
+from app.config import settings
+from app.queue.connection import rabbit
+from app.db.engine import engine
+from app.api.errors import TaskNotFound, InvalidStatusTransition
 
-app.include_router(router)
+logging.basicConfig(level=logging.INFO)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # старт: поднимаем коннект к брокеру один раз на процесс
+    await rabbit.connect()
+    yield
+    # стоп: корректно отпускаем ресурсы
+    await rabbit.close()
+    await engine.dispose()
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+app.include_router(tasks.router, prefix="/api/v1")
+
+
+@app.exception_handler(TaskNotFound)
+async def task_not_found_handler(request: Request, exc: TaskNotFound):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(InvalidStatusTransition)
+async def invalid_transition_handler(request: Request, exc: InvalidStatusTransition):
+    # бизнес-ошибка перехода статуса -> 409, не 500
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
 
 @app.get("/health")
-async def health():
+async def health() -> dict:
     return {"status": "ok"}

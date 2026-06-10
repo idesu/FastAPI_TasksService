@@ -1,30 +1,35 @@
-from pydantic_settings import BaseSettings
+from functools import lru_cache
+from pydantic import PostgresDsn, AmqpDsn, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
-    POSTGRES_HOST: str = "localhost"
-    POSTGRES_PORT: int = 5432
-    POSTGRES_USER: str = "taskuser"
-    POSTGRES_PASSWORD: str = "taskpass"
-    POSTGRES_DB: str = "taskdb"
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
-    RABBITMQ_HOST: str = "localhost"
-    RABBITMQ_PORT: int = 5672
-    RABBITMQ_USER: str = "guest"
-    RABBITMQ_PASSWORD: str = "guest"
-    RABBITMQ_QUEUE: str = "tasks_queue"
+    # app
+    app_name: str = "task-service"
+    debug: bool = False
 
-    API_HOST: str = "0.0.0.0"
-    API_PORT: int = 8000
+    # postgres
+    database_url: PostgresDsn
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_echo: bool = False
 
-    @property
-    def database_url(self) -> str:
-        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+    # rabbitmq
+    rabbitmq_url: AmqpDsn
+    task_queue: str = "tasks"
+    worker_prefetch: int = Field(default=10, ge=1)
 
-    @property
-    def rabbitmq_url(self) -> str:
-        return f"amqp://{self.RABBITMQ_USER}:{self.RABBITMQ_PASSWORD}@{self.RABBITMQ_HOST}:{self.RABBITMQ_PORT}/"
+    # worker shutdown
+    shutdown_timeout: int = Field(default=30, ge=1)
 
-    class Config:
-        env_file = ".env"
 
-settings = Settings()
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

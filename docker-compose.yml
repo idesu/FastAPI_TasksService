@@ -11,6 +11,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   rabbitmq:
     image: rabbitmq:3.12-management
@@ -20,6 +25,22 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+
+  migrate:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://taskuser:taskpass@postgres:5432/taskdb
+    command: alembic upgrade head
+    restart: "no"
 
   api:
     build: .
@@ -29,19 +50,27 @@ services:
       - postgres
       - rabbitmq
     environment:
-      POSTGRES_HOST: postgres
-      RABBITMQ_HOST: rabbitmq
+      DATABASE_URL: postgresql+asyncpg://taskuser:taskpass@postgres:5432/taskdb
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - .:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
     build: .
     depends_on:
-      - postgres
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
-      POSTGRES_HOST: postgres
-      RABBITMQ_HOST: rabbitmq
-    command: python -m app.worker
+      DATABASE_URL: postgresql+asyncpg://taskuser:taskpass@postgres:5432/taskdb
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - .:/app
+    command: python -m app.worker.consumer
     restart: unless-stopped
     deploy:
       replicas: 2   # масштабирование воркеров

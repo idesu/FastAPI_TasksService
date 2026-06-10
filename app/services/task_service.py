@@ -1,57 +1,68 @@
 from uuid import UUID
-from datetime import datetime
-from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import Task, TaskStatus, TaskPriority
-from app.schemas import TaskCreate
+from app.models.task import Task, TaskStatus
+from app.repositories.task_repository import TaskRepository
+from app.schemas.task import TaskCreate
+from app.queue.publisher import publish_task
+from app.api.errors import TaskNotFound, InvalidStatusTransition
+
+_ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
+    TaskStatus.NEW: {TaskStatus.PENDING, TaskStatus.CANCELLED},
+    TaskStatus.PENDING: {TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED},
+    TaskStatus.IN_PROGRESS: {TaskStatus.COMPLETED, TaskStatus.FAILED},
+    TaskStatus.COMPLETED: set(),
+    TaskStatus.FAILED: set(),
+    TaskStatus.CANCELLED: set(),
+}
+
+_PRIORITY_MAP = {"LOW": 1, "MEDIUM": 5, "HIGH": 10}
+
+# допустимые переходы статусов — единственный источник правды
+# Порядок при создании принципиальный: сперва коммит в БД, потом публикация в очередь.
+# Если упасть после коммита, но до публикации — задача в БД останется в PENDING и её добёрет фоновый reconciler.
+# Если бы я публиковал до коммита, воркер мог бы дёрнуть задачу, которой ещё нет в базе.
+# В идеале можно допилить transactional outbox, но для тестового достаточно правильного порядка плюс reconciler.
+
 
 class TaskService:
-    @staticmethod
-    async def create_task(db: AsyncSession, task_data: TaskCreate) -> Task:
+    def __init__(self, session: AsyncSession, repo: TaskRepository):
+        self._session = session
+        self._repo = repo
+
+    async def create_task(self, payload: TaskCreate) -> Task:
         task = Task(
-            title=task_data.title,
-            description=task_data.description,
-            priority=task_data.priority,
-            status=TaskStatus.NEW
+            title=payload.title,
+            description=payload.description,
+            priority=payload.priority,
+            status=TaskStatus.PENDING,
         )
-        db.add(task)
-        await db.commit()
-        await db.refresh(task)
+        await self._repo.add(task)        # flush -> есть id, коммита нет
+        await self._session.commit()      # транзакцией рулит сервис
+
+        # публикация ПОСЛЕ коммита: в БД задача уже точно есть
+        await publish_task(task.id, _PRIORITY_MAP[payload.priority.value])
         return task
 
-    @staticmethod
-    async def get_task(db: AsyncSession, task_id: UUID) -> Task | None:
-        result = await db.execute(select(Task).where(Task.id == task_id))
-        return result.scalar_one_or_none()
-
-    @staticmethod
-    async def get_tasks(db: AsyncSession, status: TaskStatus | None, priority: TaskPriority | None, limit: int, offset: int):
-        query = select(Task)
-        if status:
-            query = query.where(Task.status == status)
-        if priority:
-            query = query.where(Task.priority == priority)
-        query = query.order_by(Task.created_at.desc()).limit(limit).offset(offset)
-        result = await db.execute(query)
-        return result.scalars().all()
-
-    @staticmethod
-    async def update_task_status(db: AsyncSession, task_id: UUID, status: TaskStatus, **kwargs):
-        task = await TaskService.get_task(db, task_id)
-        if task:
-            task.status = status
-            for key, value in kwargs.items():
-                setattr(task, key, value)
-            await db.commit()
-            await db.refresh(task)
+    async def get_task(self, task_id: UUID) -> Task:
+        task = await self._repo.get(task_id)
+        if task is None:
+            raise TaskNotFound(f"task {task_id} not found")
         return task
 
-    @staticmethod
-    async def cancel_task(db: AsyncSession, task_id: UUID) -> Task | None:
-        task = await TaskService.get_task(db, task_id)
-        if task and task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
-            task.status = TaskStatus.CANCELLED
-            task.completed_at = datetime.utcnow()
-            await db.commit()
-            await db.refresh(task)
+    async def list_tasks(self, status, limit, offset) -> tuple[list[Task], int]:
+        items = await self._repo.list(status, limit, offset)
+        total = await self._repo.count(status)
+        return items, total
+
+    async def cancel_task(self, task_id: UUID) -> Task:
+        task = await self.get_task(task_id)
+        self._ensure_transition(task.status, TaskStatus.CANCELLED)
+        task.status = TaskStatus.CANCELLED
+        await self._session.commit()
         return task
+
+    def _ensure_transition(self, current: TaskStatus, target: TaskStatus) -> None:
+        if target not in _ALLOWED_TRANSITIONS[current]:
+            raise InvalidStatusTransition(
+                f"cannot move from {current.value} to {target.value}"
+            )

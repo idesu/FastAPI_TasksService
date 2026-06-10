@@ -1,45 +1,53 @@
-
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
-from app.database import get_db
-from app.services.task_service import TaskService
-from app.services.rabbitmq import publish_task
-from app.schemas import TaskCreate, TaskResponse, TaskStatusResponse, TaskListParams
-from app.models import TaskStatus
+from fastapi import APIRouter, status, Query
+from app.api.deps import TaskServiceDep
+from app.schemas.task import TaskCreate, TaskRead, TaskStatusRead, TaskList
+from app.models.task import TaskStatus
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+router = APIRouter(prefix="/tasks", tags=["tasks"])
 
-@router.post("/", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
-async def create_task(task_data: TaskCreate, db: AsyncSession = Depends(get_db)):
-    task = await TaskService.create_task(db, task_data)
-    # Отправляем в очередь (статус становится PENDING)
-    await TaskService.update_task_status(db, task.id, TaskStatus.PENDING)
-    await publish_task(task.id, task.priority.value)
-    return task
 
-@router.get("/", response_model=list[TaskResponse])
-async def get_tasks(params: TaskListParams = Depends(), db: AsyncSession = Depends(get_db)):
-    tasks = await TaskService.get_tasks(db, params.status, params.priority, params.limit, params.offset)
-    return tasks
+@router.post(
+    "",
+    response_model=TaskRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_task(payload: TaskCreate, service: TaskServiceDep) -> TaskRead:
+    task = await service.create_task(payload)
+    return TaskRead.model_validate(task)
 
-@router.get("/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: UUID, db: AsyncSession = Depends(get_db)):
-    task = await TaskService.get_task(db, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
 
-@router.delete("/{task_id}", response_model=TaskResponse)
-async def cancel_task(task_id: UUID, db: AsyncSession = Depends(get_db)):
-    task = await TaskService.cancel_task(db, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
+@router.get("", response_model=TaskList)
+async def list_tasks(
+    service: TaskServiceDep,
+    status_filter: TaskStatus | None = Query(default=None, alias="status"), # конфликтует с импортом из FastAPI
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> TaskList:
+    items, total = await service.list_tasks(status_filter, limit, offset)
+    return TaskList(
+        items=[TaskRead.model_validate(t) for t in items],
+        total=total, limit=limit, offset=offset,
+    )
 
-@router.get("/{task_id}/status", response_model=TaskStatusResponse)
-async def get_task_status(task_id: UUID, db: AsyncSession = Depends(get_db)):
-    task = await TaskService.get_task(db, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return TaskStatusResponse(id=task.id, status=task.status)
+
+@router.get("/{task_id}", response_model=TaskRead)
+async def get_task(task_id: UUID, service: TaskServiceDep) -> TaskRead:
+    task = await service.get_task(task_id)   # кинет TaskNotFound -> 404
+    return TaskRead.model_validate(task)
+
+
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_task(task_id: UUID, service: TaskServiceDep) -> None:
+    await service.cancel_task(task_id)       # InvalidStatusTransition -> 409
+
+
+@router.get("/{task_id}/status", response_model=TaskStatusRead)
+async def get_task_status(task_id: UUID, service: TaskServiceDep) -> TaskStatusRead:
+    """
+    Эндпоинт статуса отдаёт лёгкую схему TaskStatusRead — только id, status и времена,
+    без description и result.
+    Это горячий запрос, клиент его дёргает в поллинге, гонять полную задачу незачем.
+    """
+    task = await service.get_task(task_id)
+    return TaskStatusRead.model_validate(task)
