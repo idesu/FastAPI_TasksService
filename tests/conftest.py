@@ -8,7 +8,7 @@ from app.models.base import Base
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://test_user:test_password@localhost:5433/test_tasks",
+    "postgresql+asyncpg://test_tasks:test_password@localhost:5433/test_tasks",
 )
 
 

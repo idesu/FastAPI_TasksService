@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock
 from uuid import uuid4
+
 from app.services.task_service import TaskService
 from app.models.task import TaskStatus
 from app.api.errors import InvalidStatusTransition, TaskNotFound
@@ -18,7 +19,7 @@ def repo():
 
 @pytest.fixture
 def service(session, repo):
-    return TaskService(session=session, repo=repo)
+    return TaskService(session=session, repo=repo, publisher=AsyncMock())
 
 
 @pytest.mark.asyncio

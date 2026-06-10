@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.task import Task, TaskStatus
 from app.repositories.task_repository import TaskRepository
 from app.schemas.task import TaskCreate
-from app.rmq_queue.publisher import publish_task
+from app.rmq_queue.publisher import Publisher
 from app.api.errors import TaskNotFound, InvalidStatusTransition
 
 _ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
@@ -17,17 +17,12 @@ _ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
 
 _PRIORITY_MAP = {"LOW": 1, "MEDIUM": 5, "HIGH": 10}
 
-# допустимые переходы статусов — единственный источник правды
-# Порядок при создании принципиальный: сперва коммит в БД, потом публикация в очередь.
-# Если упасть после коммита, но до публикации — задача в БД останется в PENDING и её добёрет фоновый reconciler.
-# Если бы я публиковал до коммита, воркер мог бы дёрнуть задачу, которой ещё нет в базе.
-# В идеале можно допилить transactional outbox, но для тестового достаточно правильного порядка плюс reconciler.
-
 
 class TaskService:
-    def __init__(self, session: AsyncSession, repo: TaskRepository):
+    def __init__(self, session: AsyncSession, repo: TaskRepository, publisher: Publisher) -> None:
         self._session = session
         self._repo = repo
+        self._publisher = publisher
 
     async def create_task(self, payload: TaskCreate) -> Task:
         task = Task(
@@ -40,7 +35,7 @@ class TaskService:
         await self._session.commit()      # транзакцией рулит сервис
 
         # публикация ПОСЛЕ коммита: в БД задача уже точно есть
-        await publish_task(task.id, _PRIORITY_MAP[payload.priority.value])
+        await self._publisher.publish(str(task.id), _PRIORITY_MAP[payload.priority.value])
         return task
 
     async def get_task(self, task_id: UUID) -> Task:

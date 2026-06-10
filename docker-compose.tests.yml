@@ -4,13 +4,13 @@ services:
   test-db:
     image: postgres:14
     environment:
-      POSTGRES_USER: test_user
+      POSTGRES_USER: test_tasks
       POSTGRES_PASSWORD: test_password
       POSTGRES_DB: test_tasks
     ports:
       - "5433:5432"   # используем другой порт, чтобы не конфликтовать с основной БД
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U test_user" ]
+      test: [ "CMD-SHELL", "pg_isready -U test_tasks" ]
       interval: 2s
       timeout: 5s
       retries: 10
