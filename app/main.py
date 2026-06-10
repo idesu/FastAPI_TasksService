@@ -3,9 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.api.healthchecks import check_database, check_rabbitmq
 from app.api.v1 import tasks
 from app.config import settings
-from app.queue.connection import rabbit
+from app.rmq_queue.connection import rabbit
 from app.db.engine import engine
 from app.api.errors import TaskNotFound, InvalidStatusTransition
 
@@ -40,4 +41,11 @@ async def invalid_transition_handler(request: Request, exc: InvalidStatusTransit
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    db_ok = await check_database()
+    rabbit_ok = await check_rabbitmq()
+    status = "healthy" if (db_ok and rabbit_ok) else "unhealthy"
+    return {
+        "status": status,
+        "database": "up" if db_ok else "down",
+        "rabbitmq": "up" if rabbit_ok else "down",
+    }

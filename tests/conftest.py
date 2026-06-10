@@ -1,9 +1,15 @@
 import asyncio
+import os
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from app.db.base import Base
-from app.config import settings
+from app.models.base import Base
+
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://test_user:test_password@localhost:5433/test_tasks",
+)
 
 
 @pytest.fixture(scope="session")
@@ -16,7 +22,7 @@ def event_loop():
 @pytest_asyncio.fixture(scope="session")
 async def engine():
     # отдельная тестовая база, не та, что в dev
-    eng = create_async_engine(str(settings.test_database_url), poolclass=None)
+    eng = create_async_engine(str(TEST_DATABASE_URL), poolclass=None)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield eng

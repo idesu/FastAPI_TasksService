@@ -2,7 +2,7 @@ import asyncio
 import logging
 import signal
 import aio_pika
-from app.queue.connection import rabbit
+from app.rmq_queue.connection import rabbit
 from app.config import settings
 from app.db.engine import SessionFactory
 from app.worker.handler import TaskHandler

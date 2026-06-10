@@ -23,8 +23,6 @@ class TaskPriority(str, Enum):
 
 
 class Task(Base):
-    """
-    """
     __tablename__ = "tasks"
 
     id: Mapped[uuid.UUID] = mapped_column(

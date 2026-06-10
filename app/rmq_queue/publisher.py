@@ -2,7 +2,7 @@ import json
 import aio_pika
 from uuid import UUID
 from app.config import settings
-from app.queue.connection import rabbit
+from app.rmq_queue.connection import rabbit
 
 
 async def publish_task(task_id: UUID, priority: int) -> None:

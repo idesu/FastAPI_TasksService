@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.task import Task, TaskStatus
 from app.repositories.task_repository import TaskRepository
 from app.schemas.task import TaskCreate
-from app.queue.publisher import publish_task
+from app.rmq_queue.publisher import publish_task
 from app.api.errors import TaskNotFound, InvalidStatusTransition
 
 _ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {

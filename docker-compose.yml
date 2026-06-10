@@ -47,8 +47,10 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://taskuser:taskpass@postgres:5432/taskdb
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
