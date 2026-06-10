@@ -1,63 +1,77 @@
+import logging
 from uuid import UUID
+
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.task import Task, TaskStatus
+
 from app.repositories.task_repository import TaskRepository
-from app.schemas.task import TaskCreate
-from app.rmq_queue.publisher import Publisher
-from app.api.errors import TaskNotFound, InvalidStatusTransition
+from app.repositories.outbox_repository import OutboxRepository
+from app.models.task import Task, TaskStatus
+from app.schemas.task import TaskCreate, TaskRead, TaskStatusRead, TaskFilter
+from app.services.exceptions import TaskNotFound, InvalidStatusTransition
 
-_ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
-    TaskStatus.NEW: {TaskStatus.PENDING, TaskStatus.CANCELLED},
-    TaskStatus.PENDING: {TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED},
-    TaskStatus.IN_PROGRESS: {TaskStatus.COMPLETED, TaskStatus.FAILED},
-    TaskStatus.COMPLETED: set(),
-    TaskStatus.FAILED: set(),
-    TaskStatus.CANCELLED: set(),
-}
+logger = logging.getLogger(__name__)
 
-_PRIORITY_MAP = {"LOW": 1, "MEDIUM": 5, "HIGH": 10}
+# из каких статусов задачу ещё можно отменить
+_CANCELLABLE = {TaskStatus.NEW, TaskStatus.PENDING}
 
 
 class TaskService:
-    def __init__(self, session: AsyncSession, repo: TaskRepository, publisher: Publisher) -> None:
-        self._session = session
+    def __init__(
+        self,
+        session: AsyncSession,
+        repo: TaskRepository,
+        outbox: OutboxRepository,
+    ):
+        self._session = session       # сервис держит границу транзакции
         self._repo = repo
-        self._publisher = publisher
+        self._outbox = outbox
 
-    async def create_task(self, payload: TaskCreate) -> Task:
+    async def create_task(self, payload: TaskCreate) -> TaskRead:
         task = Task(
             title=payload.title,
             description=payload.description,
             priority=payload.priority,
-            status=TaskStatus.PENDING,
+            status=TaskStatus.NEW,        # NEW -> relay переведёт в PENDING после publish
         )
-        await self._repo.add(task)        # flush -> есть id, коммита нет
-        await self._session.commit()      # транзакцией рулит сервис
+        await self._repo.add(task)        # flush внутри -> появляется task.id
 
-        # публикация ПОСЛЕ коммита: в БД задача уже точно есть
-        await self._publisher.publish(str(task.id), _PRIORITY_MAP[payload.priority.value])
-        return task
+        # КЛЮЧЕВОЕ: задача и событие пишутся в ОДНОЙ транзакции
+        await self._outbox.add(
+            aggregate_id=task.id,
+            event_type="task.created",
+            payload={"task_id": str(task.id), "priority": task.priority.value},
+        )
 
-    async def get_task(self, task_id: UUID) -> Task:
+        await self._session.commit()      # атомарно: либо обе записи, либо ни одной
+        return TaskRead.model_validate(task)
+
+    async def get_task(self, task_id: UUID) -> TaskRead:
         task = await self._repo.get(task_id)
         if task is None:
             raise TaskNotFound(f"task {task_id} not found")
-        return task
+        return TaskRead.model_validate(task)
 
-    async def list_tasks(self, status, limit, offset) -> tuple[list[Task], int]:
-        items = await self._repo.list(status, limit, offset)
-        total = await self._repo.count(status)
-        return items, total
+    async def get_status(self, task_id: UUID) -> TaskStatusRead:
+        task = await self._repo.get(task_id)
+        if task is None:
+            raise TaskNotFound(f"task {task_id} not found")
+        return TaskStatusRead.model_validate(task)
 
-    async def cancel_task(self, task_id: UUID) -> Task:
-        task = await self.get_task(task_id)
-        self._ensure_transition(task.status, TaskStatus.CANCELLED)
+    async def list_tasks(self, flt: TaskFilter, limit: int, offset: int) -> list[TaskRead]:
+        tasks = await self._repo.list(flt, limit=limit, offset=offset)
+        return [TaskRead.model_validate(t) for t in tasks]
+
+    async def cancel_task(self, task_id: UUID) -> TaskRead:
+        task = await self._repo.get(task_id)
+        if task is None:
+            raise TaskNotFound(f"task {task_id} not found")
+
+        # бизнес-правило: завершённую/выполняющуюся задачу не отменяем
+        if task.status not in _CANCELLABLE:
+            raise InvalidStatusTransition(
+                f"cannot cancel task in status {task.status.value}"
+            )
+
         task.status = TaskStatus.CANCELLED
         await self._session.commit()
-        return task
-
-    def _ensure_transition(self, current: TaskStatus, target: TaskStatus) -> None:
-        if target not in _ALLOWED_TRANSITIONS[current]:
-            raise InvalidStatusTransition(
-                f"cannot move from {current.value} to {target.value}"
-            )
+        return TaskRead.model_validate(task)

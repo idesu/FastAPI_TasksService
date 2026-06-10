@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     # app
     app_name: str = "task-service"
+    log_level: str = "INFO"
     debug: bool = False
 
     # postgres

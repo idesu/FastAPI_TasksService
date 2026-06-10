@@ -58,7 +58,7 @@ services:
       - .:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  worker:
+  relay:
     build: .
     depends_on:
       postgres:
@@ -72,10 +72,29 @@ services:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     volumes:
       - .:/app
-    command: python -m app.worker.consumer
+    command: python -m app.workers.relay
     restart: unless-stopped
     deploy:
-      replicas: 2   # масштабирование воркеров
+      replicas: 1   # масштабирование воркеров
+
+  task_worker:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://taskuser:taskpass@postgres:5432/taskdb
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - .:/app
+    command: python -m app.workers.task_worker
+    restart: unless-stopped
+    deploy:
+      replicas: 1   # масштабирование воркеров
 
 volumes:
   postgres_data:

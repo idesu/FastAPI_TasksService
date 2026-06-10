@@ -6,36 +6,36 @@ from app.models.task import TaskStatus, TaskPriority
 
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
-    description: str | None = None
-    priority: TaskPriority = TaskPriority.MEDIUM
+    description: str | None = Field(default=None, max_length=10_000)
+    priority: TaskPriority = TaskPriority.MEDIUM   # дефолт, если не прислали
+
+    model_config = ConfigDict(extra="forbid")  # лишнее поле -> 422, не молча проглотить
+
+
+class TaskFilter(BaseModel):
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
+
 
 
 class TaskRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: UUID
     title: str
     description: str | None
-    status: TaskStatus
     priority: TaskPriority
+    status: TaskStatus
+    result: dict | None
+    error: str | None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
-    result: dict | None
-    error: str | None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TaskStatusRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: UUID
     status: TaskStatus
-    started_at: datetime | None
-    finished_at: datetime | None
+    error: str | None = None
 
-
-class TaskList(BaseModel):
-    items: list[TaskRead]
-    total: int
-    limit: int
-    offset: int
+    model_config = ConfigDict(from_attributes=True)

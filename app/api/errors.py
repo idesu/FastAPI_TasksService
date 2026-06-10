@@ -1,17 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-
-class DomainError(Exception):
-    """База для доменных ошибок."""
-
-
-class TaskNotFound(DomainError):
-    pass
-
-
-class InvalidStatusTransition(DomainError):
-    pass
+from app.services.exceptions import TaskNotFound, InvalidStatusTransition
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -21,4 +11,5 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(InvalidStatusTransition)
     async def _conflict(request: Request, exc: InvalidStatusTransition):
+        # нельзя отменить завершённую -> 409, не 500
         return JSONResponse(status_code=409, content={"detail": str(exc)})

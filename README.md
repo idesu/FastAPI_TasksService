@@ -1,54 +1,55 @@
     task-service/
     ├── app/
-    │   ├── main.py                  # сборка FastAPI, роутеры, lifespan
-    │   ├── config.py                # Settings через pydantic-settings, всё из env
+    │   ├── main.py                      # FastAPI: сборка app, lifespan, роутеры
+    │   ├── config.py                    # pydantic-settings: DSN, очереди, таймауты
     │   │
-    │   ├── api/                     # HTTP-слой, тонкий
-    │   │   ├── deps.py              # Depends: сессия, репозиторий, сервис
-    │   │   ├── errors.py            # exception handlers, маппинг на HTTP-коды
+    │   ├── api/
+    │   │   ├── deps.py                  # composition root: сессия, репозитории, publisher
+    │   │   ├── errors.py                # маппинг доменных исключений в HTTP-коды
     │   │   └── v1/
-    │   │       ├── router.py        # сборка роутеров v1
-    │   │       └── tasks.py         # эндпоинты /api/v1/tasks
+    │   │       └── tasks.py             # POST/GET/DELETE /api/v1/tasks
     │   │
-    │   ├── schemas/                 # Pydantic: запросы и ответы
-    │   │   └── task.py              # TaskCreate, TaskRead, TaskStatusRead
+    │   ├── schemas/
+    │   │   └── task.py                  # Pydantic: TaskCreate, TaskRead, фильтры
     │   │
-    │   ├── services/                # бизнес-логика, переходы статусов
-    │   │   └── task_service.py      # create, cancel, валидация переходов
+    │   ├── models/
+    │   │   ├── base.py                  # DeclarativeBase, общие миксины (timestamps)
+    │   │   ├── task.py                  # Task, TaskStatus
+    │   │   └── outbox.py                # OutboxMessage
     │   │
-    │   ├── repositories/            # доступ к данным, SQLAlchemy
-    │   │   └── task_repository.py
+    │   ├── repositories/
+    │   │   ├── task_repository.py       # add, claim (с reclaim), list, get
+    │   │   └── outbox_repository.py     # add, fetch_unsent, mark_sent
     │   │
-    │   ├── models/                  # ORM-модели, enum'ы
-    │   │   ├── base.py
-    │   │   └── task.py
+    │   ├── services/
+    │   │   ├── task_service.py          # create_task (task + outbox в одной транзакции)
+    │   │   └── exceptions.py            # TaskNotFound, InvalidStatusTransition
     │   │
-    │   ├── db/                      # подключение к БД
-    │   │   ├── engine.py            # async engine, sessionmaker
-    │   │   └── session.py           # get_session
+    │   ├── queue/
+    │   │   ├── connection.py            # RabbitConnection, lifecycle коннекта
+    │   │   └── publisher.py             # Protocol Publisher + RabbitPublisher
     │   │
-    │   ├── queue/                   # работа с RabbitMQ
-    │   │   ├── publisher.py         # публикация задачи в очередь
-    │   │   └── connection.py
+    │   ├── db/
+    │   │   └── session.py               # async engine, sessionmaker, get_session
     │   │
-    │   └── worker/                  # отдельный процесс-потребитель
-    │       ├── consumer.py          # читает очередь, вызывает handler
-    │       └── handler.py           # claim задачи, обработка, статус
+    │   └── workers/
+    │       ├── base.py                  # Worker: graceful shutdown, stop-event, drain
+    │       ├── relay.py                 # outbox -> rabbit, NEW -> PENDING
+    │       └── task_worker.py           # consume, claim, _process, COMPLETED/FAILED
     │
-    ├── migrations/                  # Alembic
-    │   ├── env.py
+    ├── migrations/
+    │   ├── env.py                       # Alembic, URL из settings
     │   └── versions/
     │
     ├── tests/
-    │   ├── conftest.py              # фикстуры: тестовая БД, моки очереди
-    │   ├── unit/                    # сервис с замоканным репозиторием
-    │   └── integration/             # API + БД через testcontainers
+    │   ├── conftest.py                  # engine, factory, session (откат), client
+    │   ├── unit/                        # сервис с моками репо и publisher
+    │   └── integration/                 # реальный Postgres: claim, outbox, SKIP LOCKED
     │
-    ├── Dockerfile
-    ├── docker-compose.yml           # сервис, воркер, postgres, rabbitmq
-    ├── alembic.ini
     ├── pyproject.toml
-    └── .env.example
+    ├── alembic.ini
+    ├── Dockerfile
+    ├── docker-compose.yml               # postgres + rabbitmq для локалки
 
 
 Главное — api и worker это две точки входа в один кодген. Веб-сервис и воркер запускаются как разные процессы, но переиспользуют общие слои: модели, репозиторий, конфиг, подключение к БД. Дублирования нет, масштабирую их независимо.

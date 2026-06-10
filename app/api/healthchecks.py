@@ -1,6 +1,6 @@
 import asyncio
 from sqlalchemy import text
-from app.db.engine import engine
+from app.db.session import engine
 from aio_pika import connect_robust
 from app.config import settings
 

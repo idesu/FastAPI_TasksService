@@ -1,14 +1,12 @@
 from typing import Annotated
-
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db.session import get_session
 from app.repositories.task_repository import TaskRepository
-from app.rmq_queue.connection import rabbit
-from app.rmq_queue.publisher import Publisher, RabbitPublisher
+from app.repositories.outbox_repository import OutboxRepository
 from app.services.task_service import TaskService
+
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -17,20 +15,20 @@ def get_task_repository(session: SessionDep) -> TaskRepository:
     return TaskRepository(session)
 
 
-def get_publisher() -> Publisher:
-    return RabbitPublisher(rabbit, settings.task_queue)
+def get_outbox_repository(session: SessionDep) -> OutboxRepository:
+    return OutboxRepository(session)
 
 
-RepoDep = Annotated[TaskRepository, Depends(get_task_repository)]
-PublisherDep = Annotated[Publisher, Depends(get_publisher)]
+TaskRepositoryDep = Annotated[TaskRepository, Depends(get_task_repository)]
+OutboxRepositoryDep = Annotated[OutboxRepository, Depends(get_outbox_repository)]
 
 
 def get_task_service(
     session: SessionDep,
-    repo: RepoDep,
-    publisher: PublisherDep,
+    repo: TaskRepositoryDep,
+    outbox: OutboxRepositoryDep,
 ) -> TaskService:
-    return TaskService(session=session, repo=repo, publisher=publisher)
+    return TaskService(session=session, repo=repo, outbox=outbox)
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]

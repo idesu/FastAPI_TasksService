@@ -7,8 +7,9 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import settings
-from app.models.base import Base          # Base со всеми импортированными моделями
-from app.models import task           # noqa: F401 — нужен, чтобы модель попала в metadata
+from app.models.base import Base            # Base со всеми импортированными моделями
+from app.models import task                 # noqa: F401 — нужен, чтобы модель попала в metadata
+from app.models import outbox
 
 config = context.config
 if config.config_file_name:

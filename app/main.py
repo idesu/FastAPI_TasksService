@@ -6,24 +6,27 @@ from fastapi.responses import JSONResponse
 from app.api.healthchecks import check_database, check_rabbitmq
 from app.api.v1 import tasks
 from app.config import settings
-from app.rmq_queue.connection import rabbit
-from app.db.engine import engine
-from app.api.errors import TaskNotFound, InvalidStatusTransition
+from app.db.session import dispose_engine
+from app.rmq_queue.connection import RabbitConnection
+from app.api.errors import TaskNotFound, InvalidStatusTransition, register_exception_handlers
 
 logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    # старт: поднимаем коннект к брокеру один раз на процесс
-    await rabbit.connect()
+async def lifespan(app):
+    app.state.rabbit = await RabbitConnection.connect()   # один коннект на процесс
     yield
-    # стоп: корректно отпускаем ресурсы
-    await rabbit.close()
-    await engine.dispose()
+    await app.state.rabbit.close()
+    await dispose_engine()
 
 
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app = FastAPI(
+    title="Task Service",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+register_exception_handlers(app)
 
 app.include_router(tasks.router, prefix="/api/v1")
 
@@ -39,13 +42,14 @@ async def invalid_transition_handler(request: Request, exc: InvalidStatusTransit
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
-@app.get("/health")
-async def health() -> dict:
-    db_ok = await check_database()
-    rabbit_ok = await check_rabbitmq()
-    status = "healthy" if (db_ok and rabbit_ok) else "unhealthy"
-    return {
-        "status": status,
-        "database": "up" if db_ok else "down",
-        "rabbitmq": "up" if rabbit_ok else "down",
-    }
+@app.get("/health/live", include_in_schema=False)
+async def liveness() -> dict:
+    # процесс жив — никаких внешних пингов, иначе k8s убьёт под при моргании БД
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def readiness() -> dict:
+    # готов принимать трафик — здесь уместны реальные пинги зависимостей
+    rabbit_ok = not app.state.rabbit.channel.is_closed
+    return {"status": "ok" if rabbit_ok else "degraded"}
