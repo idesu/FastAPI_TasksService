@@ -3,9 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.healthchecks import check_database, check_rabbitmq
 from app.api.v1 import tasks
-from app.config import settings
 from app.db.session import dispose_engine
 from app.rmq_queue.connection import RabbitConnection
 from app.api.errors import TaskNotFound, InvalidStatusTransition, register_exception_handlers

@@ -1,37 +1,32 @@
-import asyncio
-from unittest.mock import AsyncMock
-
 import pytest
-from uuid import uuid4, UUID
+from uuid import uuid4
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_session, get_publisher
+from app.api.deps import get_session
 from app.main import app
 from app.models.task import Task, TaskStatus
 
 
 async def seed_task(
-    session: AsyncSession,
+    db_session: AsyncSession,
     *,
     status: TaskStatus = TaskStatus.PENDING,
     **overrides,
 ) -> Task:
     defaults = dict(id=uuid4(), title="seeded", priority="LOW", status=status)
     task = Task(**{**defaults, **overrides})
-    session.add(task)
-    await session.flush()
+    db_session.add(task)
+    await db_session.flush()
     return task   # возвращаю объект целиком — нужен и id, и поля для ассертов
 
 
 @pytest_asyncio.fixture
-async def client(session):
+async def client(db_session):
     # подменяем сессию приложения на тестовую (транзакция с откатом)
-    app.dependency_overrides[get_session] = lambda: session
-    app.dependency_overrides[get_publisher] = lambda: AsyncMock()
+    app.dependency_overrides[get_session] = lambda: db_session
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -46,7 +41,7 @@ async def test_create_and_get_task(client):
 
     got = await client.get(f"/api/v1/tasks/{task_id}")
     assert got.status_code == 200
-    assert got.json()["status"] == "PENDING"
+    assert got.json()["status"] == "NEW"
 
 
 @pytest.mark.asyncio
@@ -56,8 +51,8 @@ async def test_get_missing_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_cancel_completed_returns_409(client, session):
+async def test_cancel_completed_returns_409(client, db_session):
     # готовим задачу сразу в COMPLETED через сессию
-    task = await seed_task(session, status=TaskStatus.COMPLETED)
+    task = await seed_task(db_session, status=TaskStatus.COMPLETED)
     resp = await client.delete(f"/api/v1/tasks/{task.id}")
     assert resp.status_code == 409  # InvalidStatusTransition -> 409 Conflict

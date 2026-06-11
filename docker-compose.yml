@@ -75,7 +75,7 @@ services:
     command: python -m app.workers.relay
     restart: unless-stopped
     deploy:
-      replicas: 1   # масштабирование воркеров
+      replicas: 3   # масштабирование воркеров
 
   task_worker:
     build: .
@@ -94,7 +94,7 @@ services:
     command: python -m app.workers.task_worker
     restart: unless-stopped
     deploy:
-      replicas: 1   # масштабирование воркеров
+      replicas: 3   # масштабирование воркеров
 
 volumes:
   postgres_data:

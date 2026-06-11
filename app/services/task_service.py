@@ -11,7 +11,6 @@ from app.services.exceptions import TaskNotFound, InvalidStatusTransition
 
 logger = logging.getLogger(__name__)
 
-# из каких статусов задачу ещё можно отменить
 _CANCELLABLE = {TaskStatus.NEW, TaskStatus.PENDING}
 
 
@@ -31,11 +30,11 @@ class TaskService:
             title=payload.title,
             description=payload.description,
             priority=payload.priority,
-            status=TaskStatus.NEW,        # NEW -> relay переведёт в PENDING после publish
+            status=TaskStatus.NEW,        # NEW -> PENDING relay переведёт в после publish
         )
         await self._repo.add(task)        # flush внутри -> появляется task.id
 
-        # КЛЮЧЕВОЕ: задача и событие пишутся в ОДНОЙ транзакции
+        # задача и событие пишутся в ОДНОЙ транзакции
         await self._outbox.add(
             aggregate_id=task.id,
             event_type="task.created",

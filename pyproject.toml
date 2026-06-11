@@ -17,6 +17,7 @@ aio-pika = "^9.3.0"
 pydantic = "^2.5.0"
 pydantic-settings = "^2.1.0"
 python-dotenv = "^1.0.0"
+pytest-cov = "^7.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.3"

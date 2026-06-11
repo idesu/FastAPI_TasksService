@@ -2,8 +2,14 @@ import pytest
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+from sqlalchemy import select
+
+from app.models.outbox import OutboxMessage
+from app.repositories.outbox_repository import OutboxRepository
+from app.repositories.task_repository import TaskRepository
+from app.schemas.task import TaskCreate
 from app.services.task_service import TaskService
-from app.models.task import TaskStatus
+from app.models.task import TaskStatus, Task, TaskPriority
 from app.api.errors import InvalidStatusTransition, TaskNotFound
 
 
@@ -19,7 +25,7 @@ def repo():
 
 @pytest.fixture
 def service(session, repo):
-    return TaskService(session=session, repo=repo, publisher=AsyncMock())
+    return TaskService(session=session, repo=repo, outbox=repo)
 
 
 @pytest.mark.asyncio
@@ -39,9 +45,20 @@ async def test_get_missing_task_raises(service, repo):
 
 
 @pytest.mark.asyncio
-async def test_cancel_pending_commits(service, repo, session):
-    task = AsyncMock(status=TaskStatus.PENDING)
-    repo.get.return_value = task
-    await service.cancel_task(uuid4())
-    assert task.status == TaskStatus.CANCELLED
-    session.commit.assert_awaited_once()   # транзакция закрыта именно сервисом
+async def test_create_task_writes_task_and_outbox(db_session):
+    service = TaskService(
+        session=db_session,
+        repo=TaskRepository(db_session),
+        outbox=OutboxRepository(db_session),
+    )
+    result = await service.create_task(TaskCreate(title="t", priority="HIGH"))
+
+    assert result.status == TaskStatus.NEW
+    assert result.created_at is not None
+
+    task = await db_session.get(Task, result.id)
+    assert task.status == TaskStatus.NEW
+
+    rows = (await db_session.execute(select(OutboxMessage))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].sent_at is None

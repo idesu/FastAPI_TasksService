@@ -1,69 +1,76 @@
 import asyncio
-from sqlalchemy import select, update, func
+import logging
 
 from app.config import settings
-from app.rmq_queue.connection import RabbitConnection
 from app.workers.base import Worker
 from app.db.session import async_session_factory
-from app.models.outbox import OutboxMessage
-from app.models.task import Task, TaskStatus
-from app.rmq_queue.publisher import Publisher, RabbitPublisher
+from app.repositories.outbox_repository import OutboxRepository
+from app.rmq_queue.connection import RabbitConnection
+from app.rmq_queue.publisher import RabbitPublisher
 
-_PRIORITY = {"LOW": 1, "MEDIUM": 5, "HIGH": 10}
+logging.basicConfig(level=settings.log_level)
+logger = logging.getLogger(__name__)
 
 
 class RelayWorker(Worker):
-    def __init__(self, publisher: Publisher, batch: int = 100, idle_delay: float = 1.0):
+    def __init__(
+        self,
+        publisher: RabbitPublisher,
+        batch_size: int = 100,
+        idle_sleep: float = 1.0,
+    ):
         super().__init__()
         self._publisher = publisher
-        self._batch = batch
-        self._idle_delay = idle_delay
+        self._batch_size = batch_size
+        self._idle_sleep = idle_sleep
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
-            sent = await self._relay_batch()
+            try:
+                sent = await self._relay_batch()
+            except Exception:
+                # сбой базы/брокера в проходе -> не валим воркер, ждём и повторяем
+                logger.exception("relay batch failed")
+                await asyncio.sleep(self._idle_sleep)
+                continue
             if sent == 0:
-                # очередь пуста — спим, но просыпаемся сразу если пришёл стоп
-                try:
-                    await asyncio.wait_for(self._stop.wait(), timeout=self._idle_delay)
-                except asyncio.TimeoutError:
-                    pass
+                await asyncio.sleep(self._idle_sleep)
 
     async def _relay_batch(self) -> int:
         async with async_session_factory() as s:
-            rows = (await s.execute(
-                select(OutboxMessage).where(OutboxMessage.sent_at.is_(None))
-                .order_by(OutboxMessage.created_at)
-                .with_for_update(skip_locked=True)   # несколько relay не дерутся
-                .limit(self._batch)
-            )).scalars().all()
+            repo = OutboxRepository(s)
 
-            if not rows:
+            # пачка неотправленных под FOR UPDATE SKIP LOCKED
+            messages = await repo.fetch_unsent(self._batch_size)
+            if not messages:
                 return 0
 
-            for msg in rows:
+            for msg in messages:
                 try:
+                    # publish с publisher confirms -> ждём ack брокера
                     await self._publisher.publish(
-                        msg.payload["task_id"], _PRIORITY[msg.payload["priority"]]
-                    )
-                    msg.sent_at = func.now()
-                    await s.execute(
-                        update(Task)
-                        .where(Task.id == msg.aggregate_id, Task.status == TaskStatus.NEW)
-                        .values(status=TaskStatus.PENDING)
+                        task_id=str(msg.aggregate_id),
+                        payload=msg.payload,
                     )
                 except Exception:
-                    msg.retry_count += 1   # publish упал — оставляем неотправленным, retry позже
-            await s.commit()
-            return len(rows)
+                    logger.exception("publish failed for outbox %s", msg.id)
+                    await repo.mark_failed(msg.id)              # retry_count++, sent_at не трогаем
+                else:
+                    await repo.mark_sent_and_promote(msg.id, msg.aggregate_id)  # sent_at + NEW->PENDING
+
+            await s.commit()   # один commit на пачку; блокировки держались до сюда
+            return len(messages)
 
     async def _cleanup(self) -> None:
-        await self._publisher.close()
+        pass
+
 
 async def main() -> None:
     rabbit = await RabbitConnection.connect()
     publisher = RabbitPublisher(rabbit, settings.task_queue)
-    worker = RelayWorker(publisher)
+    await publisher.setup()
+
+    worker = RelayWorker(publisher, batch_size=settings.relay_batch_size)
     try:
         await worker.run()
     finally:

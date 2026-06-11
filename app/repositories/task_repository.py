@@ -38,7 +38,7 @@ class TaskRepository:
             .where(
                 Task.id == task_id,
                 or_(
-                    Task.status == TaskStatus.PENDING,
+                    Task.status.in_([TaskStatus.PENDING, TaskStatus.NEW]),
                     # reclaim: воркер умер, started_at протух -> переотдаём
                     and_(
                         Task.status == TaskStatus.IN_PROGRESS,

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     rabbitmq_url: AmqpDsn
     task_queue: str = "tasks"
     worker_prefetch: int = Field(default=10, ge=1)
+    relay_batch_size: int = 10
 
     # worker shutdown
     shutdown_timeout: int = Field(default=30, ge=1)

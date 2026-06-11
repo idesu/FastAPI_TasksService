@@ -11,18 +11,17 @@ from app.config import settings
 # один engine на процесс — он держит пул соединений, создаётся единожды
 engine: AsyncEngine = create_async_engine(
     str(settings.database_url),
-    pool_timeout=30,                     # сколько ждать соединение из пула, потом ошибка
-    pool_pre_ping=True,                  # пингуем перед выдачей — отсекаем мёртвые коннекты
-    pool_recycle=1800,                   # пересоздаём соединение раз в 30 мин
+    pool_timeout=30,
+    pool_pre_ping=True,
+    pool_recycle=1800,
 )
 
 
-# фабрика сессий — expire_on_commit=False критичен для async
 async_session_factory = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,   # объекты не протухают после commit -> нет ленивых подгрузок
-    autoflush=False,          # flush контролируем явно, не по неявному триггеру
+    autoflush=False,          # flush контролируем явно
 )
 
 
@@ -32,7 +31,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
         except Exception:
-            await session.rollback()   # любое исключение -> откат, не оставляем грязь
+            await session.rollback()   # любое исключение -> откат
             raise
         # commit НЕ здесь — границу транзакции держит сервисный слой
 
