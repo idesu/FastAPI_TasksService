@@ -9,13 +9,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.config import settings
 from app.models.base import Base            # Base со всеми импортированными моделями
 from app.models import task                 # noqa: F401 — нужен, чтобы модель попала в metadata
-from app.models import outbox
 
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
 
-# URL берём из приложения, не дублируем в alembic.ini
 config.set_main_option("sqlalchemy.url", str(settings.database_url))
 
 target_metadata = Base.metadata
@@ -26,8 +24,8 @@ def run_migrations_offline() -> None:
         url=str(settings.database_url),
         target_metadata=target_metadata,
         literal_binds=True,
-        compare_type=True,            # ловим смену типа колонки
-        compare_server_default=True,  # и смену server_default
+        compare_type=True,
+        compare_server_default=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -50,23 +48,6 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     asyncio.run(run_async_migrations())
-#
-# def run_migrations_online() -> None:
-#     section = config.get_section(config.config_ini_section, {})
-#     section["sqlalchemy.url"] = str(settings.database_url)
-#     connectable = engine_from_config(
-#         section, prefix="sqlalchemy.", poolclass=pool.NullPool
-#     )
-#     with connectable.connect() as connection:
-#         context.configure(
-#             connection=connection,
-#             target_metadata=target_metadata,
-#             compare_type=True,
-#             compare_server_default=True,
-#         )
-#         with context.begin_transaction():
-#             context.run_migrations()
-
 
 if context.is_offline_mode():
     run_migrations_offline()
